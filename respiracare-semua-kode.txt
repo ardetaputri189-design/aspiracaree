@@ -1,0 +1,1207 @@
+
+==================== FILE: .env.example ====================
+# Air quality + weather + geocoding use Open-Meteo (no key needed).
+# Optional: real monitoring stations on the map (https://explore.openaq.org/register)
+VITE_OPENAQ_KEY=
+# Optional: anonymous scan logging
+VITE_SUPABASE_URL=
+VITE_SUPABASE_ANON_KEY=
+# Set to true to force DEMO MODE (clearly labelled sample data)
+VITE_DEMO_MODE=false
+
+==================== FILE: README.md ====================
+# RespiraCare
+
+React + TypeScript + Tailwind + Recharts + Leaflet. Run:
+
+```bash
+npm install
+cp .env.example .env
+npm run dev
+```
+
+- Air quality, weather, and place search use Open-Meteo (no API key).
+- Surroundings use OpenStreetMap (Overpass API).
+- Map station markers need `VITE_OPENAQ_KEY`.
+- Scan logging to Supabase is optional: run `supabase/schema.sql`, then set the two Supabase variables.
+- `VITE_DEMO_MODE=true` shows clearly labelled sample data.
+- The `components/ui` files follow shadcn/ui conventions (cva + tailwind-merge). To use the full library, run `npx shadcn@latest init`.
+
+==================== FILE: index.html ====================
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RespiraCare – Know Your Air. Protect Your Lungs.</title>
+    <meta name="description" content="Check air quality, learn how your environment affects respiratory health, and get prevention guidance." />
+  </head>
+  <body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body>
+</html>
+
+==================== FILE: package.json ====================
+{
+  "name": "respiracare",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": { "dev": "vite", "build": "tsc --noEmit && vite build", "preview": "vite preview" },
+  "dependencies": {
+    "@fontsource-variable/plus-jakarta-sans": "^5.0.0",
+    "@supabase/supabase-js": "^2.45.0",
+    "class-variance-authority": "^0.7.0",
+    "clsx": "^2.1.0",
+    "leaflet": "^1.9.4",
+    "lucide-react": "^0.400.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-leaflet": "^4.2.1",
+    "recharts": "^2.12.0",
+    "tailwind-merge": "^2.3.0"
+  },
+  "devDependencies": {
+    "@types/leaflet": "^1.9.12",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "autoprefixer": "^10.4.19",
+    "postcss": "^8.4.38",
+    "tailwindcss": "^3.4.4",
+    "typescript": "^5.5.0",
+    "vite": "^5.3.0"
+  }
+}
+
+==================== FILE: postcss.config.js ====================
+export default { plugins: { tailwindcss: {}, autoprefixer: {} } }
+
+==================== FILE: src/App.tsx ====================
+import { Footer } from '@/components/Footer'
+import { Navbar } from '@/components/Navbar'
+import { useRoute } from '@/lib/router'
+import About from '@/pages/About'
+import AirQuality from '@/pages/AirQuality'
+import Home from '@/pages/Home'
+import LungHealth from '@/pages/LungHealth'
+import Prevention from '@/pages/Prevention'
+
+export default function App() {
+  const route = useRoute()
+  const page = route === '/air-quality' ? <AirQuality /> : route === '/lung-health' ? <LungHealth /> : route === '/prevention' ? <Prevention /> : route === '/about' ? <About /> : <Home />
+  return (<div className="min-h-screen"><Navbar route={route} /><main>{page}</main><Footer /></div>)
+}
+
+==================== FILE: src/components/AQIGauge.tsx ====================
+import { AQI_NAME, getLevel } from '@/lib/aqi'
+export function AQIGauge({ value, size = 220 }: { value: number | null; size?: number }) {
+  const r = 80, full = 2 * Math.PI * r, arc = full * 0.75
+  const level = value == null ? null : getLevel(value)
+  const frac = Math.min(value ?? 0, 500) / 500
+  return (
+    <figure className="m-0 text-center" aria-label={value == null ? `${AQI_NAME} not available` : `${AQI_NAME} ${value}, ${level!.label}`}>
+      <svg width={size} height={size} viewBox="0 0 200 200" role="img">
+        <circle cx="100" cy="100" r={r} fill="none" stroke="#E2E8F0" strokeWidth="14" strokeLinecap="round" strokeDasharray={`${arc} ${full}`} transform="rotate(135 100 100)" />
+        {level && <circle cx="100" cy="100" r={r} fill="none" stroke={level.color} strokeWidth="14" strokeLinecap="round" strokeDasharray={`${Math.max(arc * frac, 1)} ${full}`} transform="rotate(135 100 100)" style={{ transition: 'stroke-dasharray .6s ease' }} />}
+        <text x="100" y="102" textAnchor="middle" fontSize="44" fontWeight="700" fill="#172B3A">{value == null ? '–' : Math.round(value)}</text>
+        <text x="100" y="126" textAnchor="middle" fontSize="12" fill="#64748B">{AQI_NAME}</text>
+      </svg>
+      {level && <figcaption className="-mt-4 inline-block rounded-full px-3 py-1 text-sm font-semibold text-white" style={{ background: level.color }}>{level.label}</figcaption>}
+    </figure>
+  )
+}
+
+==================== FILE: src/components/AirQualityCard.tsx ====================
+import type { LucideIcon } from 'lucide-react'
+import { Card } from '@/components/ui/card'
+export function AirQualityCard({ label, value, unit, icon: Icon, hint }: { label: string; value: number | null; unit: string; icon: LucideIcon; hint?: string }) {
+  return (
+    <Card className="p-4">
+      <div className="flex items-center justify-between text-sm text-ink-muted"><span>{label}</span><Icon size={18} className="text-brand" /></div>
+      <div className="mt-2 flex items-baseline gap-1">
+        {value == null ? <span className="text-lg font-semibold text-ink-muted">Not reported</span> : <><span className="text-3xl font-bold tabular-nums">{Math.round(value * 10) / 10}</span><span className="text-sm text-ink-muted">{unit}</span></>}
+      </div>
+      {hint && <p className="mt-1 text-xs text-ink-muted">{hint}</p>}
+    </Card>
+  )
+}
+
+==================== FILE: src/components/EnvironmentalCategoryCard.tsx ====================
+import { AlertTriangle, ShieldCheck, Wind } from 'lucide-react'
+import type { Category } from '@/data/categories'
+import { Card } from '@/components/ui/card'
+
+export function EnvironmentalCategoryCard({ category, compact = false }: { category: Category; compact?: boolean }) {
+  const Icon = category.icon
+  return (
+    <Card className="overflow-hidden p-0">
+      <div className="flex items-center gap-4 p-5" style={{ background: `linear-gradient(135deg, ${category.tint}22, ${category.tint}08)` }}>
+        <span className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl text-white" style={{ background: category.tint }}><Icon size={28} /></span>
+        <div><h3 className="text-lg font-bold">{category.name}</h3><p className="text-sm text-ink-muted">{category.description}</p></div>
+      </div>
+      {!compact && (
+        <div className="grid gap-5 p-5 text-sm md:grid-cols-2">
+          <div><h4 className="mb-1 font-semibold">Possible pollution sources</h4><ul className="list-disc space-y-0.5 pl-5 text-ink-muted">{category.sources.map(s => <li key={s}>{s}</li>)}</ul></div>
+          <div><h4 className="mb-1 font-semibold">Pollutants that may be present</h4><div className="flex flex-wrap gap-1.5">{category.pollutants.map(p => <span key={p} className="rounded-full bg-slate-100 px-2.5 py-1 text-xs">{p}</span>)}</div></div>
+          <div className="flex gap-2"><Wind className="mt-0.5 shrink-0 text-brand" size={18} /><p className="text-ink-muted">{category.respiratory}</p></div>
+          <div className="flex gap-2"><ShieldCheck className="mt-0.5 shrink-0 text-ok" size={18} /><ul className="space-y-1 text-ink-muted">{category.tips.map(t => <li key={t}>{t}</li>)}</ul></div>
+          <p className="flex gap-2 rounded-xl bg-warn/10 p-3 text-xs text-ink-muted md:col-span-2"><AlertTriangle size={16} className="shrink-0 text-warn" />A land-use category describes what is typical for an area. It does not mean the air at this spot is polluted; check the measurements.</p>
+        </div>
+      )}
+    </Card>
+  )
+}
+
+==================== FILE: src/components/Footer.tsx ====================
+import { Wind } from 'lucide-react'
+import { routes } from '@/lib/router'
+export function Footer() {
+  return (
+    <footer className="mt-24 border-t border-slate-100 bg-white">
+      <div className="mx-auto grid max-w-6xl gap-8 px-4 py-10 md:grid-cols-3">
+        <div>
+          <div className="flex items-center gap-2 font-bold"><span className="grid h-8 w-8 place-items-center rounded-lg bg-brand text-white"><Wind size={18} /></span>RespiraCare</div>
+          <p className="mt-3 max-w-xs text-sm text-ink-muted">Environmental data and respiratory health education.</p>
+        </div>
+        <nav aria-label="Footer" className="flex flex-col gap-2 text-sm">
+          {routes.map(r => <a key={r.path} href={`#${r.path}`} className="text-ink-muted hover:text-ink">{r.label}</a>)}
+        </nav>
+        <p className="text-xs leading-relaxed text-ink-muted">
+          RespiraCare is for education only. It does not diagnose conditions or replace professional medical advice. Air data: Open-Meteo (CAMS), map data © OpenStreetMap contributors, stations: OpenAQ.
+        </p>
+      </div>
+    </footer>
+  )
+}
+
+==================== FILE: src/components/InteractiveMap.tsx ====================
+import { useEffect, useState } from 'react'
+import { CircleMarker, MapContainer, Popup, TileLayer, useMap, useMapEvents } from 'react-leaflet'
+import 'leaflet/dist/leaflet.css'
+import { fetchStationLatest, fetchStations, hasStations, type Place, type Station, type StationReading } from '@/lib/api'
+import { pm25Band } from '@/lib/aqi'
+
+function Recenter({ p }: { p: Place }) { const map = useMap(); useEffect(() => { map.setView([p.lat, p.lon], Math.max(map.getZoom(), 11)) }, [p.lat, p.lon]); return null }
+function Picker({ onPick }: { onPick: (lat: number, lon: number) => void }) { useMapEvents({ click: e => onPick(e.latlng.lat, e.latlng.lng) }); return null }
+
+function StationMarker({ s }: { s: Station }) {
+  const [r, setR] = useState<StationReading[] | null>(null)
+  const [err, setErr] = useState(false)
+  const pm = r?.find(x => x.parameter === 'pm25')
+  const band = pm ? pm25Band(pm.value) : null
+  const load = () => { if (r) return; fetchStationLatest(s).then(setR).catch(() => setErr(true)) }
+  return (
+    <CircleMarker center={[s.lat, s.lon]} radius={9} pathOptions={{ color: '#fff', weight: 2, fillColor: band?.color ?? '#94A3B8', fillOpacity: 1 }} eventHandlers={{ popupopen: load }}>
+      <Popup>
+        <strong>{s.name}</strong><br /><span style={{ color: '#64748B' }}>{s.provider}</span>
+        <div style={{ marginTop: 6 }}>
+          {err ? 'Latest readings are unavailable.' : !r ? 'Loading latest readings…' : r.length === 0 ? 'No recent readings.' : (
+            <>{pm && <div><b>PM2.5: {pm.value} {pm.units}</b>{band && <> (band: {band.label})</>}</div>}
+              {r.filter(x => x.parameter !== 'pm25').slice(0, 4).map(x => <div key={x.parameter}>{x.parameter.toUpperCase()}: {x.value} {x.units}</div>)}
+              <div style={{ color: '#64748B', fontSize: 11 }}>{r[0].time}</div></>
+          )}
+        </div>
+        <div style={{ marginTop: 6, fontSize: 11, color: '#64748B' }}>This reading represents the station location only.</div>
+      </Popup>
+    </CircleMarker>
+  )
+}
+
+export function InteractiveMap({ place, onPick }: { place: Place | null; onPick: (lat: number, lon: number) => void }) {
+  const [stations, setStations] = useState<Station[] | null>(null)
+  const [stErr, setStErr] = useState(false)
+  useEffect(() => {
+    setStations(null); setStErr(false)
+    if (place && hasStations) fetchStations(place.lat, place.lon).then(setStations).catch(() => setStErr(true))
+  }, [place?.lat, place?.lon])
+  const center: [number, number] = place ? [place.lat, place.lon] : [-2.5, 118]
+  return (
+    <div>
+      <div className="h-[380px] overflow-hidden rounded-2xl border border-slate-100 shadow-card">
+        <MapContainer center={center} zoom={place ? 11 : 4} scrollWheelZoom={false} className="h-full w-full">
+          <TileLayer attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' url="https://tile.openstreetmap.org/{z}/{x}/{y}.png" />
+          <Picker onPick={onPick} />
+          {place && <><Recenter p={place} />
+            <CircleMarker center={[place.lat, place.lon]} radius={10} pathOptions={{ color: '#fff', weight: 3, fillColor: '#087F8C', fillOpacity: 1 }}><Popup><strong>{place.name}</strong><br />Selected location</Popup></CircleMarker></>}
+          {stations?.map(s => <StationMarker key={s.id} s={s} />)}
+        </MapContainer>
+      </div>
+      <p className="mt-2 text-xs text-ink-muted" aria-live="polite">
+        {!hasStations ? 'Click the map to choose a location. Monitoring-station markers appear when an OpenAQ API key (VITE_OPENAQ_KEY) is configured.'
+          : stErr ? 'Monitoring stations could not be loaded right now.'
+          : !place ? 'Choose a location to see monitoring stations within 25 km.'
+          : stations === null ? 'Loading monitoring stations…'
+          : stations.length === 0 ? 'No monitoring stations found within 25 km. Values on this page are model estimates.'
+          : `${stations.length} monitoring stations within 25 km. Grey markers have not loaded readings yet; click one to load. Colours show PM2.5 bands, and each reading represents only its own station.`}
+      </p>
+    </div>
+  )
+}
+
+==================== FILE: src/components/LocationSearch.tsx ====================
+import { useEffect, useState } from 'react'
+import { Crosshair, Loader2, MapPin, Search } from 'lucide-react'
+import { geocode, placeLabel, type Place } from '@/lib/api'
+import { useLocationData } from '@/context/LocationContext'
+import { Button } from '@/components/ui/button'
+
+export function LocationSearch() {
+  const { select, locate, locating, locateError } = useLocationData()
+  const [q, setQ] = useState('')
+  const [results, setResults] = useState<Place[]>([])
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState<string | null>(null)
+  useEffect(() => {
+    if (q.trim().length < 2) { setResults([]); setMsg(null); return }
+    const id = setTimeout(async () => {
+      setBusy(true)
+      try { const r = await geocode(q.trim()); setResults(r); setMsg(r.length ? null : 'No matching places. Try a nearby city name.') }
+      catch { setMsg('Search is unavailable right now. Check your connection and try again.') }
+      finally { setBusy(false) }
+    }, 350)
+    return () => clearTimeout(id)
+  }, [q])
+  const pick = (p: Place) => { setQ(''); setResults([]); select(p) }
+  return (
+    <div>
+      <div className="flex flex-col gap-3 sm:flex-row">
+        <div className="relative flex-1">
+          <Search size={18} className="absolute left-3 top-3.5 text-ink-muted" />
+          <input value={q} onChange={e => setQ(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && results[0]) pick(results[0]) }} placeholder="Search a city or place, e.g. Malang" aria-label="Search location" className="h-11 w-full rounded-xl border border-slate-200 bg-white pl-10 pr-10 text-sm" />
+          {busy && <Loader2 size={18} className="absolute right-3 top-3.5 animate-spin text-ink-muted" />}
+          {results.length > 0 && (
+            <ul className="absolute z-[1000] mt-1 w-full overflow-hidden rounded-xl border border-slate-100 bg-white shadow-card">
+              {results.map(p => <li key={`${p.lat},${p.lon}`}><button className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm hover:bg-slate-50" onClick={() => pick(p)}><MapPin size={16} className="text-brand" />{placeLabel(p)}</button></li>)}
+            </ul>
+          )}
+        </div>
+        <Button variant="outline" onClick={locate} disabled={locating}>{locating ? <Loader2 size={18} className="animate-spin" /> : <Crosshair size={18} />}Use My Location</Button>
+      </div>
+      <p className="mt-2 min-h-5 text-sm text-ink-muted" aria-live="polite">{msg ?? locateError}</p>
+    </div>
+  )
+}
+
+==================== FILE: src/components/LungVisualization.tsx ====================
+import { useId, useState, type KeyboardEvent } from 'react'
+import { Info } from 'lucide-react'
+import { Card } from '@/components/ui/card'
+import { cn } from '@/lib/utils'
+
+export type Part = 'trachea' | 'bronchi' | 'alveoli'
+export type Mode = 'short' | 'long'
+
+const lerp = (a: number, b: number, t: number) => a + (b - a) * t
+function mix(c1: string, c2: string, t: number) {
+  const p = (c: string) => [1, 3, 5].map(i => parseInt(c.slice(i, i + 2), 16))
+  const a = p(c1), b = p(c2)
+  return '#' + a.map((v, i) => Math.round(lerp(v, b[i], t)).toString(16).padStart(2, '0')).join('')
+}
+const reduced = () => typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+const PATH_L = 'M200 10 L200 150 C190 175 160 190 135 215 L110 285'
+const PATH_R = 'M200 10 L200 150 C210 175 240 190 265 215 L290 285'
+const ALV: [number, number][] = [[110, 235], [92, 275], [122, 305], [150, 255], [150, 325], [84, 325], [138, 205]]
+
+export function LungSVG({ exposure, mode, selected, onSelect, className }: { exposure: number; mode: Mode; selected?: Part | null; onSelect?: (p: Part) => void; className?: string }) {
+  const uid = useId().replace(/:/g, '')
+  const t = exposure / 100
+  const tissue = mode === 'long' ? mix('#F4A9BA', '#B5667B', t) : mix('#F4A9BA', '#EE8E9F', t * 0.5)
+  const light = mix(tissue, '#FFFFFF', 0.45)
+  const airway = mix('#E58FA2', '#C0394F', mode === 'short' ? t * 0.8 : t * 0.4)
+  const n = Math.round(3 + t * 26)
+  const still = reduced()
+  const sel = (p: Part) => (selected === p ? '#087F8C' : 'none')
+  const hit = (p: Part, label: string) => onSelect ? {
+    role: 'button' as const, tabIndex: 0, 'aria-label': label, style: { cursor: 'pointer' },
+    onClick: () => onSelect(p),
+    onKeyDown: (e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(p) } }
+  } : {}
+  return (
+    <svg viewBox="0 0 400 400" className={className} role="img" aria-label="Illustration of the human respiratory system">
+      <defs>
+        <radialGradient id={`lg${uid}`} cx="40%" cy="35%" r="75%"><stop offset="0" stopColor={light} /><stop offset="1" stopColor={tissue} /></radialGradient>
+        <filter id={`bl${uid}`}><feGaussianBlur stdDeviation="14" /></filter>
+      </defs>
+      <ellipse cx="200" cy="385" rx="120" ry="10" fill="#172B3A" opacity=".06" />
+      {[`M182 135 C140 120 80 150 62 235 C50 300 62 350 110 362 C155 372 182 345 182 300 Z`, `M218 135 C260 120 320 150 338 235 C350 300 338 350 290 362 C245 372 218 345 218 300 Z`].map((d, i) => (
+        <path key={i} d={d} fill={`url(#lg${uid})`} stroke={mix(tissue, '#7A2E40', 0.35)} strokeWidth="2" />
+      ))}
+      {irritationGlow(uid, mode === 'short' ? t * 0.55 : t * 0.2)}
+      <g {...hit('alveoli', 'Alveoli (air sacs)')} stroke={sel('alveoli')} strokeWidth={selected === 'alveoli' ? 3 : 0}>
+        {ALV.flatMap(([x, y]) => [[x, y], [400 - x, y]]).map(([x, y], i) => (
+          <g key={i} fill={mix(tissue, '#FFFFFF', 0.55)} stroke={mix(tissue, '#7A2E40', 0.3)} strokeWidth="1">
+            <circle cx={x} cy={y} r="9" /><circle cx={x + 10} cy={y + 6} r="7" /><circle cx={x - 8} cy={y + 8} r="7" />
+          </g>
+        ))}
+      </g>
+      <g {...hit('bronchi', 'Bronchi')} fill="none" strokeLinecap="round">
+        {[PATH_L.replace('M200 10 L200 150', 'M200 150'), PATH_R.replace('M200 10 L200 150', 'M200 150')].map((d, i) => (
+          <g key={i}><path d={d} stroke={selected === 'bronchi' ? '#087F8C' : 'transparent'} strokeWidth="20" /><path d={d} stroke={airway} strokeWidth="11" /></g>
+        ))}
+      </g>
+      <g {...hit('trachea', 'Trachea (windpipe)')}>
+        <rect x="186" y="14" width="28" height="140" rx="14" fill={airway} stroke={sel('trachea')} strokeWidth="3" />
+        {[34, 52, 70, 88, 106, 124].map(y => <line key={y} x1="190" x2="210" y1={y} y2={y} stroke="#fff" strokeOpacity=".5" strokeWidth="2" />)}
+      </g>
+      <g aria-hidden="true" fill="#475569" fillOpacity=".75">
+        {Array.from({ length: n }, (_, i) => {
+          const r = 2.4 + (i % 3) * 0.8
+          return still
+            ? <circle key={i} cx={196 + (i % 4) * 3} cy={30 + i * 8} r={r} />
+            : <circle key={i} r={r}><animateMotion dur={`${5 + (i % 5)}s`} begin={`-${((i * 0.7) % 8).toFixed(1)}s`} repeatCount="indefinite" path={i % 2 ? PATH_R : PATH_L} /></circle>
+        })}
+      </g>
+    </svg>
+  )
+}
+function irritationGlow(uid: string, opacity: number) {
+  return <g filter={`url(#bl${uid})`} opacity={Math.min(opacity, 0.7)} aria-hidden="true"><ellipse cx="200" cy="190" rx="60" ry="55" fill="#EF4444" /></g>
+}
+
+const PARTS: Record<Part, { title: string; text: string }> = {
+  trachea: { title: 'Trachea (windpipe)', text: 'Air enters through the nose or mouth and passes down the trachea. Mucus and tiny hairs (cilia) catch many larger particles here.' },
+  bronchi: { title: 'Bronchi', text: 'The trachea splits into two bronchi, one for each lung. Irritants can make these airways inflamed or narrowed, which can cause coughing or wheezing.' },
+  alveoli: { title: 'Alveoli (air sacs)', text: 'Oxygen passes into the blood through the thin walls of alveoli. Very small particles such as PM2.5 can reach this deep region.' }
+}
+const STAGES = [
+  { id: 'A', title: 'Low exposure', text: 'Pollutant exposure is relatively low. Keep supporting respiratory health: stay active, avoid smoke, and keep up routine health care.' },
+  { id: 'B', title: 'Increased exposure', text: 'Pollutants can irritate the airways and may trigger symptoms, especially in sensitive people such as those with asthma.' },
+  { id: 'C', title: 'Long-term exposure', text: 'Over years, exposure to air pollution is associated with a higher risk of respiratory and heart conditions. Risk depends on many factors, not on one reading.' }
+]
+
+export function LungVisualization() {
+  const [exposure, setExposure] = useState(15)
+  const [mode, setMode] = useState<Mode>('short')
+  const [part, setPart] = useState<Part>('trachea')
+  const active = exposure < 33 ? 0 : mode === 'long' ? 2 : 1
+  return (
+    <div className="grid items-start gap-6 lg:grid-cols-2">
+      <Card className="bg-gradient-to-b from-white to-brand-soft/10">
+        <LungSVG exposure={exposure} mode={mode} selected={part} onSelect={setPart} className="mx-auto w-full max-w-md" />
+        <p className="mt-2 text-center text-xs text-ink-muted">Select the windpipe, bronchi, or air sacs to learn more.</p>
+      </Card>
+      <div className="space-y-4">
+        <Card>
+          <div className="flex items-center justify-between">
+            <label htmlFor="exp" className="font-semibold">Exposure level</label>
+            <div role="group" aria-label="Exposure duration" className="flex rounded-xl bg-slate-100 p-1 text-sm">
+              {(['short', 'long'] as Mode[]).map(m => <button key={m} aria-pressed={mode === m} onClick={() => setMode(m)} className={cn('rounded-lg px-3 py-1.5 font-medium', mode === m ? 'bg-white shadow-sm' : 'text-ink-muted')}>{m === 'short' ? 'Short-term' : 'Long-term'}</button>)}
+            </div>
+          </div>
+          <input id="exp" type="range" min={0} max={100} value={exposure} onChange={e => setExposure(+e.target.value)} className="mt-4 w-full accent-[#087F8C]" aria-valuetext={`${exposure} out of 100`} />
+          <div className="flex justify-between text-xs text-ink-muted"><span>Low</span><span>High</span></div>
+        </Card>
+        <div className="space-y-2" aria-live="polite">
+          {STAGES.map((s, i) => (
+            <div key={s.id} className={cn('rounded-2xl border p-4 transition-colors', i === active ? 'border-brand bg-brand/5' : 'border-slate-100 bg-white opacity-60')}>
+              <div className="font-semibold">{s.id}. {s.title}</div>
+              {i === active && <p className="mt-1 text-sm text-ink-muted">{s.text}</p>}
+            </div>
+          ))}
+        </div>
+        <Card><div className="font-semibold">{PARTS[part].title}</div><p className="mt-1 text-sm text-ink-muted">{PARTS[part].text}</p></Card>
+        <p className="flex gap-2 rounded-xl bg-warn/10 p-3 text-xs text-ink-muted"><Info size={16} className="shrink-0 text-warn" />This is a simplified educational illustration. It is not a medical simulation or a diagnosis, and a given air quality value does not cause a specific change in any person’s lungs.</p>
+      </div>
+    </div>
+  )
+}
+
+==================== FILE: src/components/Navbar.tsx ====================
+import { useState } from 'react'
+import { Menu, Wind, X } from 'lucide-react'
+import { routes } from '@/lib/router'
+import { buttonVariants } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
+
+export function Navbar({ route }: { route: string }) {
+  const [open, setOpen] = useState(false)
+  const link = (path: string) => cn('rounded-lg px-3 py-2 text-sm font-medium transition-colors', route === path ? 'bg-brand/10 text-brand' : 'text-ink-muted hover:text-ink')
+  return (
+    <header className="sticky top-0 z-50 border-b border-slate-100 bg-white/85 backdrop-blur">
+      <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4">
+        <a href="#/" className="flex items-center gap-2 font-bold text-ink">
+          <span className="grid h-9 w-9 place-items-center rounded-xl bg-brand text-white"><Wind size={20} /></span>RespiraCare
+        </a>
+        <nav className="hidden items-center gap-1 md:flex" aria-label="Main">
+          {routes.map(r => <a key={r.path} href={`#${r.path}`} className={link(r.path)} aria-current={route === r.path ? 'page' : undefined}>{r.label}</a>)}
+        </nav>
+        <a href="#/air-quality" className={cn(buttonVariants({ size: 'sm' }), 'hidden md:inline-flex')}>Check Air Quality</a>
+        <button className="grid h-10 w-10 place-items-center rounded-lg md:hidden" aria-label={open ? 'Close menu' : 'Open menu'} aria-expanded={open} onClick={() => setOpen(!open)}>
+          {open ? <X /> : <Menu />}
+        </button>
+      </div>
+      {open && (
+        <nav className="border-t border-slate-100 bg-white px-4 pb-4 pt-2 md:hidden" aria-label="Mobile">
+          <div className="flex flex-col">
+            {routes.map(r => <a key={r.path} href={`#${r.path}`} onClick={() => setOpen(false)} className={link(r.path)}>{r.label}</a>)}
+          </div>
+          <a href="#/air-quality" onClick={() => setOpen(false)} className={cn(buttonVariants(), 'mt-3 w-full')}>Check Air Quality</a>
+        </nav>
+      )}
+    </header>
+  )
+}
+
+==================== FILE: src/components/PollutionChart.tsx ====================
+import { useState } from 'react'
+import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import type { HistoryPoint } from '@/lib/api'
+import { AQI_NAME } from '@/lib/aqi'
+import { Card } from '@/components/ui/card'
+import { cn } from '@/lib/utils'
+
+const METRICS = { aqi: { label: AQI_NAME, unit: '', color: '#087F8C' }, pm25: { label: 'PM2.5', unit: 'µg/m³', color: '#EF4444' }, pm10: { label: 'PM10', unit: 'µg/m³', color: '#F59E0B' } } as const
+type M = keyof typeof METRICS
+
+export function PollutionChart({ history, isDemo }: { history: HistoryPoint[]; isDemo: boolean }) {
+  const [m, setM] = useState<M>('aqi')
+  const data = history.map(h => ({ ...h, label: h.time.slice(11, 16) }))
+  const has = data.some(d => d[m] != null)
+  return (
+    <Card>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h3 className="font-semibold">Last 24 hours{isDemo && <span className="ml-2 rounded bg-warn/15 px-2 py-0.5 text-xs text-warn">Demo data</span>}</h3>
+        <div role="tablist" aria-label="Metric" className="flex rounded-xl bg-slate-100 p-1">
+          {(Object.keys(METRICS) as M[]).map(k => (
+            <button key={k} role="tab" aria-selected={m === k} onClick={() => setM(k)} className={cn('rounded-lg px-3 py-1.5 text-sm font-medium', m === k ? 'bg-white shadow-sm' : 'text-ink-muted')}>{METRICS[k].label}</button>
+          ))}
+        </div>
+      </div>
+      <div className="mt-4 h-64">
+        {!has ? <p className="grid h-full place-items-center text-sm text-ink-muted">Historical data is not available for this location yet.</p> : (
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={data} margin={{ left: -16, right: 8, top: 8 }}>
+              <CartesianGrid stroke="#E2E8F0" strokeDasharray="3 3" vertical={false} />
+              <XAxis dataKey="label" tick={{ fontSize: 12, fill: '#64748B' }} interval="preserveStartEnd" minTickGap={24} />
+              <YAxis tick={{ fontSize: 12, fill: '#64748B' }} />
+              <Tooltip formatter={(v: number) => [`${v} ${METRICS[m].unit}`.trim(), METRICS[m].label]} labelFormatter={l => `Time ${l}`} />
+              <Line type="monotone" dataKey={m} stroke={METRICS[m].color} strokeWidth={2.5} dot={false} connectNulls />
+            </LineChart>
+          </ResponsiveContainer>
+        )}
+      </div>
+    </Card>
+  )
+}
+
+==================== FILE: src/components/PreventionRecommendation.tsx ====================
+import { Home, LogOut, Navigation } from 'lucide-react'
+import type { Plan } from '@/lib/prevention'
+import { Card } from '@/components/ui/card'
+
+const COLS = [
+  { key: 'before', title: 'Before going outside', icon: Navigation },
+  { key: 'during', title: 'During outdoor activities', icon: LogOut },
+  { key: 'after', title: 'After outdoor activities', icon: Home }
+] as const
+
+export function PreventionRecommendation({ plan }: { plan: Plan }) {
+  return (
+    <div>
+      <div className="grid gap-4 md:grid-cols-3">
+        {COLS.map(({ key, title, icon: Icon }) => (
+          <Card key={key}>
+            <div className="flex items-center gap-2 font-semibold"><span className="grid h-9 w-9 place-items-center rounded-xl bg-brand/10 text-brand"><Icon size={18} /></span>{title}</div>
+            <ul className="mt-4 space-y-3 text-sm text-ink-muted">{plan[key].map(t => <li key={t} className="flex gap-2"><span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-brand-soft" />{t}</li>)}</ul>
+          </Card>
+        ))}
+      </div>
+      <p className="mt-4 text-xs text-ink-muted">{plan.note}</p>
+    </div>
+  )
+}
+
+==================== FILE: src/components/ui/button.tsx ====================
+import { cva, type VariantProps } from 'class-variance-authority'
+import { forwardRef, type ButtonHTMLAttributes } from 'react'
+import { cn } from '@/lib/utils'
+
+export const buttonVariants = cva(
+  'inline-flex items-center justify-center gap-2 rounded-xl text-sm font-semibold transition-colors disabled:pointer-events-none disabled:opacity-50',
+  { variants: {
+      variant: { default: 'bg-brand text-white hover:bg-[#066a75]', outline: 'border border-slate-200 bg-white text-ink hover:bg-slate-50', ghost: 'text-ink hover:bg-slate-100' },
+      size: { default: 'h-11 px-5', sm: 'h-9 px-3', lg: 'h-12 px-6 text-base' } },
+    defaultVariants: { variant: 'default', size: 'default' } }
+)
+export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement>, VariantProps<typeof buttonVariants> {}
+export const Button = forwardRef<HTMLButtonElement, ButtonProps>(({ className, variant, size, ...p }, ref) => (
+  <button ref={ref} className={cn(buttonVariants({ variant, size }), className)} {...p} />
+))
+Button.displayName = 'Button'
+
+==================== FILE: src/components/ui/card.tsx ====================
+import type { HTMLAttributes } from 'react'
+import { cn } from '@/lib/utils'
+export const Card = ({ className, ...p }: HTMLAttributes<HTMLDivElement>) => (
+  <div className={cn('rounded-2xl border border-slate-100 bg-white p-5 shadow-card', className)} {...p} />
+)
+
+==================== FILE: src/context/LocationContext.tsx ====================
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
+import { fetchAir, reverseName, placeLabel, type AirData, type Place } from '@/lib/api'
+import { detectEnvironment, type EnvResult } from '@/lib/environment'
+import { saveScan } from '@/lib/supabase'
+
+type Status = 'idle' | 'loading' | 'ready' | 'error'
+interface Ctx {
+  place: Place | null; air: AirData | null; env: EnvResult | null; envError: string | null
+  status: Status; error: string | null; locating: boolean; locateError: string | null
+  select: (p: Place) => void; locate: () => void; sensitive: boolean; setSensitive: (v: boolean) => void
+}
+const LocationCtx = createContext<Ctx | null>(null)
+const KEY = 'respiracare:place'
+
+export function LocationProvider({ children }: { children: ReactNode }) {
+  const [place, setPlace] = useState<Place | null>(null)
+  const [air, setAir] = useState<AirData | null>(null)
+  const [env, setEnv] = useState<EnvResult | null>(null)
+  const [envError, setEnvError] = useState<string | null>(null)
+  const [status, setStatus] = useState<Status>('idle')
+  const [error, setError] = useState<string | null>(null)
+  const [locating, setLocating] = useState(false)
+  const [locateError, setLocateError] = useState<string | null>(null)
+  const [sensitive, setSensitive] = useState(false)
+  const req = useRef(0)
+
+  const select = useCallback((p: Place) => {
+    const id = ++req.current
+    setPlace(p); setStatus('loading'); setError(null); setEnvError(null); setAir(null); setEnv(null)
+    try { localStorage.setItem(KEY, JSON.stringify(p)) } catch { /* ignore */ }
+    Promise.allSettled([fetchAir(p), detectEnvironment(p)]).then(([a, e]) => {
+      if (id !== req.current) return
+      if (a.status === 'rejected') { setStatus('error'); setError('Could not load air quality data for this location. Check your connection and try again.') }
+      else { setAir(a.value); setStatus('ready') }
+      if (e.status === 'fulfilled') setEnv(e.value); else setEnvError('Environment data from OpenStreetMap is unavailable right now.')
+      if (a.status === 'fulfilled') saveScan({ place: placeLabel(p), lat: p.lat, lon: p.lon, aqi: a.value.aqi, pm25: a.value.pm25, category: e.status === 'fulfilled' ? e.value.category : null, demo: a.value.isDemo })
+    })
+  }, [])
+
+  const locate = useCallback(() => {
+    setLocateError(null)
+    if (!navigator.geolocation) { setLocateError('Your browser does not support location access. Search for a city instead.'); return }
+    setLocating(true)
+    navigator.geolocation.getCurrentPosition(
+      async pos => { const p = await reverseName(pos.coords.latitude, pos.coords.longitude); setLocating(false); select(p) },
+      () => { setLocating(false); setLocateError('Location permission was denied or unavailable. Search for a city instead.') },
+      { timeout: 10000 }
+    )
+  }, [select])
+
+  useEffect(() => {
+    try { const s = localStorage.getItem(KEY); if (s) select(JSON.parse(s) as Place) } catch { /* ignore */ }
+  }, [select])
+
+  return <LocationCtx.Provider value={{ place, air, env, envError, status, error, locating, locateError, select, locate, sensitive, setSensitive }}>{children}</LocationCtx.Provider>
+}
+export function useLocationData() {
+  const c = useContext(LocationCtx)
+  if (!c) throw new Error('useLocationData must be used inside LocationProvider')
+  return c
+}
+
+==================== FILE: src/data/categories.ts ====================
+import { Car, Factory, HardHat, Home, Wheat, Waves, Trees, type LucideIcon } from 'lucide-react'
+import type { CategoryKey } from '@/lib/environment'
+
+export interface Category {
+  key: CategoryKey; name: string; icon: LucideIcon; tint: string
+  description: string; sources: string[]; pollutants: string[]; respiratory: string; tips: string[]
+}
+export const CATEGORIES: Record<CategoryKey, Category> = {
+  'urban-road': {
+    key: 'urban-road', name: 'Urban Road / Highway', icon: Car, tint: '#64748B',
+    description: 'Areas close to major roads with heavy or stop-and-go traffic.',
+    sources: ['Vehicle exhaust', 'Brake and tyre wear', 'Road dust resuspension'],
+    pollutants: ['PM2.5', 'NO2', 'CO', 'Black carbon'],
+    respiratory: 'Traffic-related pollution can irritate the airways and may worsen asthma symptoms, especially near busy roads.',
+    tips: ['Walk or wait away from the kerb and idling vehicles.', 'Choose side streets or parks over main roads when possible.', 'Keep windows facing the road closed at rush hour if air quality is poor.']
+  },
+  industrial: {
+    key: 'industrial', name: 'Industrial Area', icon: Factory, tint: '#B45309',
+    description: 'Land used for factories, workshops, or other industrial activity.',
+    sources: ['Combustion and process emissions', 'Heavy vehicle traffic', 'Material handling dust'],
+    pollutants: ['PM2.5', 'PM10', 'SO2', 'NO2', 'Volatile organic compounds'],
+    respiratory: 'Industrial emissions may include gases and fine particles that can irritate the eyes, nose, and lungs. The actual mix depends on the specific facilities.',
+    tips: ['Check local air quality warnings before spending long periods outdoors.', 'Report persistent odours or smoke to the local environmental authority.', 'Use a well-fitted respirator if you work nearby and your employer advises it.']
+  },
+  construction: {
+    key: 'construction', name: 'Construction Area', icon: HardHat, tint: '#CA8A04',
+    description: 'Sites with building, demolition, or earthworks in progress.',
+    sources: ['Dust from digging and cutting', 'Diesel machinery', 'Cement and sand handling'],
+    pollutants: ['PM10', 'PM2.5', 'Silica dust', 'NO2'],
+    respiratory: 'Coarse and fine dust can irritate the nose, throat, and airways. Repeated heavy dust exposure at work carries additional risks.',
+    tips: ['Keep distance from dusty work zones and downwind areas.', 'Wash face and hands and change clothes after passing a site.', 'Workers should follow site dust-control and respiratory protection rules.']
+  },
+  residential: {
+    key: 'residential', name: 'Residential Area', icon: Home, tint: '#087F8C',
+    description: 'Neighbourhoods dominated by housing and local streets.',
+    sources: ['Local traffic', 'Cooking and heating fuels', 'Waste or open burning'],
+    pollutants: ['PM2.5', 'CO', 'NO2'],
+    respiratory: 'Air quality is often moderate, but household sources such as smoke from burning can raise indoor and outdoor particle levels.',
+    tips: ['Avoid burning waste and ventilate kitchens when cooking.', 'Ventilate your home when outdoor air quality is good.', 'Consider an air purifier for rooms where you sleep if outdoor air is often poor.']
+  },
+  agricultural: {
+    key: 'agricultural', name: 'Agricultural Area', icon: Wheat, tint: '#65A30D',
+    description: 'Farmland, orchards, and rural land used for growing crops or animals.',
+    sources: ['Dust from tilling and harvesting', 'Crop-residue burning', 'Pesticide spraying', 'Farm machinery'],
+    pollutants: ['PM10', 'PM2.5', 'Ammonia', 'Pollen and mould spores'],
+    respiratory: 'Seasonal dust, smoke from burning, and allergens can trigger coughing or wheezing in sensitive people.',
+    tips: ['Stay indoors during field burning or spraying.', 'Check pollen and smoke alerts in planting and harvest seasons.', 'Wear a properly fitted respirator for dusty farm tasks.']
+  },
+  coastal: {
+    key: 'coastal', name: 'Coastal Area', icon: Waves, tint: '#0284C7',
+    description: 'Shorelines and beaches where sea breezes influence the air.',
+    sources: ['Sea salt aerosol', 'Port and shipping emissions (if nearby)', 'Humid air that holds particles'],
+    pollutants: ['Sea-salt particles', 'PM2.5', 'SO2 and NO2 near ports'],
+    respiratory: 'Sea breezes often dilute pollution, but ports and shipping lanes nearby can add particles and gases.',
+    tips: ['Check whether a port or industrial zone is upwind.', 'Humid, salty air can feel heavy for some people with asthma; carry prescribed medicine.']
+  },
+  green: {
+    key: 'green', name: 'Green Area / Urban Park', icon: Trees, tint: '#22A06B',
+    description: 'Parks, gardens, forests, and other vegetated land.',
+    sources: ['Pollen and spores', 'Smoke from nearby fires', 'Traffic on surrounding roads'],
+    pollutants: ['Pollen', 'PM2.5 (from surroundings or fires)'],
+    respiratory: 'Green areas can offer cleaner air than busy roads, but pollen can trigger allergies, and smoke or traffic nearby still matters.',
+    tips: ['Choose paths away from busy roads for walking or exercise.', 'People with pollen allergies should check pollen forecasts.']
+  }
+}
+export const CATEGORY_LIST = Object.values(CATEGORIES)
+
+==================== FILE: src/index.css ====================
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html { scroll-behavior: smooth; }
+  body { @apply bg-canvas font-sans text-ink antialiased; }
+  :focus-visible { outline: 2px solid #087F8C; outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } * { transition-duration: 0s !important; animation: none !important; } }
+}
+.leaflet-container { font-family: inherit; border-radius: 1rem; }
+
+==================== FILE: src/lib/api.ts ====================
+export interface Place { name: string; admin?: string; country?: string; lat: number; lon: number }
+export interface HistoryPoint { time: string; aqi: number | null; pm25: number | null; pm10: number | null }
+export interface AirData {
+  isDemo: boolean; source: string; timezone: string; time: string
+  aqi: number | null; pm25: number | null; pm10: number | null; co: number | null; no2: number | null; o3: number | null
+  temp: number | null; humidity: number | null; wind: number | null; history: HistoryPoint[]
+}
+export const placeLabel = (p: Place) => [p.name, p.admin, p.country].filter(Boolean).join(', ')
+const num = (v: unknown): number | null => (typeof v === 'number' && isFinite(v) ? v : null)
+async function getJson(url: string, init?: RequestInit) {
+  const r = await fetch(url, init)
+  if (!r.ok) throw new Error(`Request failed (${r.status})`)
+  return r.json()
+}
+
+export async function geocode(q: string): Promise<Place[]> {
+  const j = await getJson(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=6&language=en&format=json`)
+  return (j.results ?? []).map((x: any) => ({ name: x.name, admin: x.admin1, country: x.country, lat: x.latitude, lon: x.longitude }))
+}
+export async function reverseName(lat: number, lon: number): Promise<Place> {
+  try {
+    const j = await getJson(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=10&lat=${lat}&lon=${lon}`)
+    const a = j.address ?? {}
+    return { name: a.city || a.town || a.village || a.county || j.name || 'Selected location', admin: a.state, country: a.country, lat, lon }
+  } catch { return { name: `${lat.toFixed(3)}, ${lon.toFixed(3)}`, lat, lon } }
+}
+
+export async function fetchAir(p: Place): Promise<AirData> {
+  if (import.meta.env.VITE_DEMO_MODE === 'true') return demoAir()
+  const q = `latitude=${p.lat}&longitude=${p.lon}&timezone=auto`
+  const [air, wx] = await Promise.all([
+    getJson(`https://air-quality-api.open-meteo.com/v1/air-quality?${q}&current=us_aqi,pm10,pm2_5,carbon_monoxide,nitrogen_dioxide,ozone&hourly=us_aqi,pm10,pm2_5&past_days=1&forecast_days=1`),
+    getJson(`https://api.open-meteo.com/v1/forecast?${q}&current=temperature_2m,relative_humidity_2m,wind_speed_10m`).catch(() => null)
+  ])
+  const c = air.current ?? {}
+  const now: string = c.time ?? ''
+  const h = air.hourly ?? { time: [] }
+  const history: HistoryPoint[] = (h.time as string[])
+    .map((t, i) => ({ time: t, aqi: num(h.us_aqi?.[i]), pm25: num(h.pm2_5?.[i]), pm10: num(h.pm10?.[i]) }))
+    .filter(x => x.time <= now && (x.aqi != null || x.pm25 != null || x.pm10 != null))
+    .slice(-24)
+  return {
+    isDemo: false, source: 'Open-Meteo Air Quality API (CAMS model estimate, not a ground sensor)', timezone: air.timezone ?? '', time: now,
+    aqi: num(c.us_aqi), pm25: num(c.pm2_5), pm10: num(c.pm10), co: num(c.carbon_monoxide), no2: num(c.nitrogen_dioxide), o3: num(c.ozone),
+    temp: num(wx?.current?.temperature_2m), humidity: num(wx?.current?.relative_humidity_2m), wind: num(wx?.current?.wind_speed_10m), history
+  }
+}
+
+function demoAir(): AirData {
+  const history = Array.from({ length: 24 }, (_, i) => ({ time: `2000-01-01T${String(i).padStart(2, '0')}:00`, aqi: 60 + Math.round(25 * Math.sin(i / 4)), pm25: 18 + Math.round(8 * Math.sin(i / 4)), pm10: 32 + Math.round(10 * Math.sin(i / 4)) }))
+  return { isDemo: true, source: 'DEMO MODE – sample values, not real measurements', timezone: 'n/a', time: 'demo', aqi: 82, pm25: 24, pm10: 41, co: 310, no2: 22, o3: 55, temp: 29, humidity: 74, wind: 8, history }
+}
+
+// ---- Optional: OpenAQ v3 monitoring stations (needs VITE_OPENAQ_KEY) ----
+const OAQ = 'https://api.openaq.org/v3'
+const oaqKey = import.meta.env.VITE_OPENAQ_KEY as string | undefined
+export const hasStations = !!oaqKey
+export interface Station { id: number; name: string; lat: number; lon: number; provider: string; sensors: Record<number, { name: string; units: string }> }
+export interface StationReading { parameter: string; value: number; units: string; time: string }
+export async function fetchStations(lat: number, lon: number): Promise<Station[]> {
+  if (!oaqKey) return []
+  const j = await getJson(`${OAQ}/locations?coordinates=${lat},${lon}&radius=25000&limit=40`, { headers: { 'X-API-Key': oaqKey } })
+  return (j.results ?? []).filter((r: any) => r.coordinates).map((r: any) => ({
+    id: r.id, name: r.name ?? `Station ${r.id}`, lat: r.coordinates.latitude, lon: r.coordinates.longitude, provider: r.provider?.name ?? 'Unknown provider',
+    sensors: Object.fromEntries((r.sensors ?? []).map((s: any) => [s.id, { name: s.parameter?.name ?? '?', units: s.parameter?.units ?? '' }]))
+  }))
+}
+export async function fetchStationLatest(s: Station): Promise<StationReading[]> {
+  if (!oaqKey) return []
+  const j = await getJson(`${OAQ}/locations/${s.id}/latest`, { headers: { 'X-API-Key': oaqKey } })
+  return (j.results ?? []).map((r: any) => ({ parameter: s.sensors[r.sensorsId]?.name ?? '?', units: s.sensors[r.sensorsId]?.units ?? '', value: r.value, time: r.datetime?.local ?? r.datetime?.utc ?? '' }))
+}
+
+==================== FILE: src/lib/aqi.ts ====================
+// US AQI categories (US EPA). RespiraCare uses the US AQI reported by the data source.
+// ISPU (Indonesia) is a different index and is NOT mixed in without a valid conversion.
+export type LevelKey = 'good' | 'moderate' | 'sensitive' | 'unhealthy' | 'very' | 'hazardous'
+export interface Level { key: LevelKey; label: string; min: number; max: number; color: string; text: string }
+export const AQI_NAME = 'US AQI'
+export const LEVELS: Level[] = [
+  { key: 'good', label: 'Good', min: 0, max: 50, color: '#22A06B', text: 'Air quality is generally satisfactory.' },
+  { key: 'moderate', label: 'Moderate', min: 51, max: 100, color: '#EAB308', text: 'Some pollutants may affect unusually sensitive individuals.' },
+  { key: 'sensitive', label: 'Unhealthy for Sensitive Groups', min: 101, max: 150, color: '#F59E0B', text: 'People with lung or heart conditions, children, and older adults may experience health effects. Most people are less likely to be affected.' },
+  { key: 'unhealthy', label: 'Unhealthy', min: 151, max: 200, color: '#EF4444', text: 'Outdoor exposure should be reduced. Sensitive groups may experience more serious effects.' },
+  { key: 'very', label: 'Very Unhealthy', min: 201, max: 300, color: '#8B5CF6', text: 'Health precautions are recommended for everyone, and sensitive groups should avoid outdoor exertion.' },
+  { key: 'hazardous', label: 'Hazardous', min: 301, max: 500, color: '#7F1D1D', text: 'Follow official health and environmental warnings.' }
+]
+export const getLevel = (aqi: number): Level => LEVELS.find(l => aqi <= l.max) ?? LEVELS[LEVELS.length - 1]
+export const levelTier = (k: LevelKey | null): 0 | 1 | 2 => (k === 'very' || k === 'hazardous' ? 2 : k === 'sensitive' || k === 'unhealthy' ? 1 : 0)
+
+// PM2.5 concentration bands (µg/m³), US EPA breakpoints (2024). Used only for station markers,
+// labelled as "PM2.5 band" – never presented as an AQI value.
+const PM25_BANDS: [number, LevelKey][] = [[9, 'good'], [35.4, 'moderate'], [55.4, 'sensitive'], [125.4, 'unhealthy'], [225.4, 'very']]
+export function pm25Band(v: number): Level {
+  const key = PM25_BANDS.find(([max]) => v <= max)?.[1] ?? 'hazardous'
+  return LEVELS.find(l => l.key === key)!
+}
+
+==================== FILE: src/lib/environment.ts ====================
+import type { Place } from './api'
+export type CategoryKey = 'urban-road' | 'industrial' | 'construction' | 'residential' | 'agricultural' | 'coastal' | 'green'
+export interface EnvResult { category: CategoryKey | null; features: { key: CategoryKey; count: number }[]; radius: number }
+const RADIUS = 500
+const query = (p: Place) => `[out:json][timeout:20];(
+way(around:${RADIUS},${p.lat},${p.lon})["highway"~"^(motorway|trunk|primary)$"];
+nwr(around:${RADIUS},${p.lat},${p.lon})["landuse"~"^(industrial|construction|residential|farmland|farmyard|orchard|vineyard|meadow|forest|grass|recreation_ground)$"];
+nwr(around:${RADIUS},${p.lat},${p.lon})["leisure"~"^(park|garden|nature_reserve)$"];
+nwr(around:${RADIUS},${p.lat},${p.lon})["natural"~"^(coastline|beach|wood)$"];
+nwr(around:${RADIUS},${p.lat},${p.lon})["man_made"="works"];
+);out tags 200;`
+const tie: Record<CategoryKey, number> = { industrial: 3, construction: 3, 'urban-road': 2, coastal: 2, agricultural: 1, residential: 1, green: 1 }
+
+function classify(t: Record<string, string>): CategoryKey | null {
+  if (t.highway) return 'urban-road'
+  if (t.landuse === 'industrial' || t.man_made === 'works') return 'industrial'
+  if (t.landuse === 'construction') return 'construction'
+  if (t.landuse === 'residential') return 'residential'
+  if (['farmland', 'farmyard', 'orchard', 'vineyard', 'meadow'].includes(t.landuse)) return 'agricultural'
+  if (t.natural === 'coastline' || t.natural === 'beach') return 'coastal'
+  if (t.leisure || t.natural === 'wood' || ['forest', 'grass', 'recreation_ground'].includes(t.landuse)) return 'green'
+  return null
+}
+
+// Uses OpenStreetMap data via the Overpass API. The result describes what is MAPPED within ~500 m,
+// not what is actually polluting the air.
+export async function detectEnvironment(p: Place): Promise<EnvResult> {
+  const r = await fetch('https://overpass-api.de/api/interpreter', { method: 'POST', body: 'data=' + encodeURIComponent(query(p)) })
+  if (!r.ok) throw new Error(`Overpass request failed (${r.status})`)
+  const j = await r.json()
+  const counts = new Map<CategoryKey, number>()
+  for (const el of j.elements ?? []) { const k = classify(el.tags ?? {}); if (k) counts.set(k, (counts.get(k) ?? 0) + 1) }
+  const features = [...counts].map(([key, count]) => ({ key, count })).sort((a, b) => b.count - a.count || tie[b.key] - tie[a.key])
+  return { category: features[0]?.key ?? null, features, radius: RADIUS }
+}
+
+==================== FILE: src/lib/prevention.ts ====================
+import type { LevelKey } from './aqi'
+import { levelTier } from './aqi'
+import type { CategoryKey } from './environment'
+
+export interface Plan { before: string[]; during: string[]; after: string[]; note: string }
+
+const CATEGORY_EXTRA: Record<CategoryKey, { before?: string; during?: string; after?: string }> = {
+  'urban-road': { before: 'Plan a route along side streets or parks instead of main roads.', during: 'Keep distance from idling vehicles and busy junctions.' },
+  industrial: { before: 'Check local warnings for smoke, odour, or emissions incidents.', during: 'Move upwind or indoors if you notice smoke or a strong chemical smell.' },
+  construction: { during: 'Stay away from dusty work zones and cross to the upwind side.', after: 'Wash your face and rinse your nose or eyes if dusty.' },
+  residential: { during: 'Avoid areas where waste or leaves are being burned.' },
+  agricultural: { before: 'Check for field burning, spraying, or pollen alerts.', after: 'Change out of dusty clothes before entering the home.' },
+  coastal: { before: 'Check whether a port or industrial zone is upwind.' },
+  green: { during: 'Pick shaded paths away from busy roads; check the pollen forecast if you have allergies.' }
+}
+
+export function buildPlan(level: LevelKey | null, category: CategoryKey | null, sensitive: boolean): Plan {
+  const tier = levelTier(level)
+  const before = ['Check the latest air quality for your location.']
+  const during: string[] = []
+  const after: string[] = []
+
+  if (tier === 0) {
+    before.push('No special precautions are needed for most people. Keep any prescribed medicine with you if you have a respiratory condition.')
+    during.push('Normal outdoor activity is generally fine. Still avoid standing next to heavy traffic or smoke.')
+    after.push('Rinse off if you were in a dusty area.', 'Pay attention to coughing, wheezing, or shortness of breath.')
+  } else if (tier === 1) {
+    before.push('Plan a shorter or lower-intensity outing and pick a route away from busy roads.', 'Prepare a well-fitting N95/FFP2-type respirator if you must be outside for long. Cloth and loose surgical masks filter fine particles poorly.')
+    during.push('Reduce strenuous outdoor exercise and take breaks indoors.', 'Avoid heavily polluted areas such as busy junctions and smoke.', 'Use a properly fitted respirator when appropriate; check that it seals around the nose and chin.')
+    after.push('Wash exposed skin and face, and change dusty clothing.', 'Watch for cough, wheeze, chest tightness, or throat irritation over the next hours.')
+  } else {
+    before.push('Consider postponing non-essential outdoor activities and check official health and environmental warnings.', 'Prepare a well-fitting N95/FFP2-type respirator if you must go out.')
+    during.push('Keep outdoor time as short and gentle as possible; avoid strenuous activity outdoors.', 'Use a properly fitted respirator and stay away from pollution sources.')
+    after.push('Wash exposed skin and face, change clothes, and rinse your nose or eyes if irritated.', 'Monitor symptoms closely and follow official health advice.')
+  }
+  after.push('Seek medical advice if symptoms are concerning or persistent. Get urgent care for severe breathing difficulty or chest pain.')
+
+  if (sensitive) {
+    before.push('If you have a respiratory or heart condition, follow your doctor’s action plan and carry prescribed medicine.')
+    if (tier >= 1) during.push('Take extra care: if you are in a sensitive group, limit time outdoors even more than the general advice.')
+  }
+  const x = category ? CATEGORY_EXTRA[category] : undefined
+  if (x?.before) before.push(x.before)
+  if (x?.during) during.push(x.during)
+  if (x?.after) after.push(x.after)
+
+  return { before, during, after, note: 'General health information, not medical advice. Individual needs differ; ask a health professional about your situation.' }
+}
+
+==================== FILE: src/lib/router.ts ====================
+import { useEffect, useState } from 'react'
+export const routes = [
+  { path: '/', label: 'Home' },
+  { path: '/air-quality', label: 'Air Quality' },
+  { path: '/lung-health', label: 'Lung Health' },
+  { path: '/prevention', label: 'Prevention Guide' },
+  { path: '/about', label: 'About Us' }
+] as const
+const get = () => window.location.hash.replace(/^#/, '') || '/'
+export function useRoute() {
+  const [r, setR] = useState(get)
+  useEffect(() => {
+    const f = () => { setR(get()); window.scrollTo(0, 0) }
+    window.addEventListener('hashchange', f)
+    return () => window.removeEventListener('hashchange', f)
+  }, [])
+  return r
+}
+
+==================== FILE: src/lib/supabase.ts ====================
+import { createClient } from '@supabase/supabase-js'
+const url = import.meta.env.VITE_SUPABASE_URL as string | undefined
+const key = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined
+export const supabase = url && key ? createClient(url, key) : null
+export async function saveScan(r: { place: string; lat: number; lon: number; aqi: number | null; pm25: number | null; category: string | null; demo: boolean }) {
+  if (!supabase || r.demo) return
+  const { demo, ...row } = r
+  try { await supabase.from('scans').insert({ ...row, lat: +r.lat.toFixed(2), lon: +r.lon.toFixed(2) }) } catch { /* logging is best-effort */ }
+}
+
+==================== FILE: src/lib/utils.ts ====================
+import { clsx, type ClassValue } from 'clsx'
+import { twMerge } from 'tailwind-merge'
+export const cn = (...i: ClassValue[]) => twMerge(clsx(i))
+
+==================== FILE: src/main.tsx ====================
+import React from 'react'
+import ReactDOM from 'react-dom/client'
+import '@fontsource-variable/plus-jakarta-sans'
+import './index.css'
+import App from './App'
+import { LocationProvider } from '@/context/LocationContext'
+
+ReactDOM.createRoot(document.getElementById('root')!).render(
+  <React.StrictMode><LocationProvider><App /></LocationProvider></React.StrictMode>
+)
+
+==================== FILE: src/pages/About.tsx ====================
+import { Calculator, Dna, Eye, Target } from 'lucide-react'
+import { Card } from '@/components/ui/card'
+const items = [
+  { icon: Eye, title: 'Vision', text: 'A community that understands its air and protects its respiratory health.' },
+  { icon: Target, title: 'Mission', text: 'Turn environmental data into clear, accurate, and actionable health education.' },
+  { icon: Dna, title: 'Biology', text: 'Explains how the respiratory system works and how particles and gases reach it.' },
+  { icon: Calculator, title: 'Mathematics', text: 'Processes, scales, and visualizes air quality data into indices, trends, and charts.' }
+]
+export default function About() {
+  return (
+    <div className="mx-auto max-w-4xl px-4 py-12">
+      <h1 className="text-3xl font-bold">About RespiraCare</h1>
+      <p className="mt-4 text-ink-muted">Air quality numbers are easy to see but hard to interpret. RespiraCare was created to connect those numbers with what they mean for breathing, and with the places where people live, study, and work. It is an educational project, not a medical service.</p>
+      <div className="mt-8 grid gap-4 sm:grid-cols-2">{items.map(i => <Card key={i.title}><i.icon className="text-brand" /><h3 className="mt-3 font-semibold">{i.title}</h3><p className="mt-1 text-sm text-ink-muted">{i.text}</p></Card>)}</div>
+      <h2 className="mt-14 text-2xl font-bold">From Environmental Data to Respiratory Awareness.</h2>
+      <p className="mt-3 text-ink-muted">RespiraCare combines Biology of the respiratory system with Mathematics to process, analyze, and visualize air quality data. Concentrations of pollutants are converted into an index, tracked over time as trends, and linked to the biology of where particles of different sizes travel in the body.</p>
+      <h2 className="mt-10 text-xl font-bold">Benefits for the public</h2>
+      <ul className="mt-3 list-disc space-y-1 pl-5 text-ink-muted"><li>Helps people read air quality information correctly.</li><li>Makes the link between environment and respiratory health easier to understand.</li><li>Encourages simple, practical precautions.</li></ul>
+      <h2 className="mt-10 text-xl font-bold">Data and limits</h2>
+      <p className="mt-3 text-sm text-ink-muted">Air quality and weather come from Open-Meteo (modelled estimates based on Copernicus CAMS data). Place search uses Open-Meteo geocoding, and surroundings come from OpenStreetMap. Optional monitoring stations come from OpenAQ. Modelled values can differ from local sensor readings. Always follow official local warnings and consult a health professional for personal medical advice.</p>
+    </div>
+  )
+}
+
+==================== FILE: src/pages/AirQuality.tsx ====================
+import { AlertCircle, CloudFog, Car, Droplets, Flame, Loader2, Sun, Thermometer, Wind } from 'lucide-react'
+import { AirQualityCard } from '@/components/AirQualityCard'
+import { AQIGauge } from '@/components/AQIGauge'
+import { EnvironmentalCategoryCard } from '@/components/EnvironmentalCategoryCard'
+import { InteractiveMap } from '@/components/InteractiveMap'
+import { LocationSearch } from '@/components/LocationSearch'
+import { PollutionChart } from '@/components/PollutionChart'
+import { buttonVariants } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
+import { CATEGORIES } from '@/data/categories'
+import { useLocationData } from '@/context/LocationContext'
+import { AQI_NAME, getLevel } from '@/lib/aqi'
+import { placeLabel, reverseName } from '@/lib/api'
+
+export default function AirQuality() {
+  const { place, air, env, envError, status, error, select } = useLocationData()
+  const level = air?.aqi != null ? getLevel(air.aqi) : null
+  return (
+    <div className="mx-auto max-w-6xl px-4 py-12">
+      <h1 className="text-3xl font-bold">Air Quality Scanner</h1>
+      <p className="mt-2 max-w-2xl text-ink-muted">Search for a place, use your location, or click the map. RespiraCare then loads the air quality and describes the surroundings.</p>
+      <div className="mt-6"><LocationSearch /></div>
+      <div className="mt-4"><InteractiveMap place={place} onPick={async (lat, lon) => select(await reverseName(lat, lon))} /></div>
+
+      {status === 'idle' && <Card className="mt-8 text-center text-sm text-ink-muted">No location selected yet. Search above to see the dashboard.</Card>}
+      {status === 'loading' && <Card className="mt-8 flex items-center gap-3 text-sm text-ink-muted"><Loader2 className="animate-spin" size={18} />Loading data for {place ? placeLabel(place) : 'this location'}…</Card>}
+      {status === 'error' && <Card className="mt-8 flex gap-3 text-sm text-danger"><AlertCircle size={18} />{error}</Card>}
+
+      {status === 'ready' && air && place && (
+        <div className="mt-8 space-y-8">
+          <Card className="grid items-center gap-6 md:grid-cols-[auto_1fr]">
+            <AQIGauge value={air.aqi} />
+            <div>
+              <h2 className="text-xl font-bold">{placeLabel(place)}</h2>
+              {air.isDemo && <p className="mt-1 inline-block rounded bg-warn/15 px-2 py-0.5 text-xs font-semibold text-warn">DEMO MODE – sample values, not real measurements</p>}
+              <p className="mt-2 text-ink-muted">{level ? level.text : 'The index is not available for this location right now.'}</p>
+              <p className="mt-3 text-xs text-ink-muted">Index: {AQI_NAME} (US EPA scale). The Indonesian ISPU is a different index, so values are not mixed or converted here. Last updated {air.time.replace('T', ' ')} ({air.timezone}). Source: {air.source}.</p>
+              <a href="#/prevention" className={buttonVariants({ size: 'sm' }) + ' mt-4'}>See prevention guide</a>
+            </div>
+          </Card>
+
+          <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+            <AirQualityCard label="PM2.5" value={air.pm25} unit="µg/m³" icon={Wind} />
+            <AirQualityCard label="PM10" value={air.pm10} unit="µg/m³" icon={CloudFog} />
+            <AirQualityCard label="CO" value={air.co} unit="µg/m³" icon={Flame} />
+            <AirQualityCard label="NO₂" value={air.no2} unit="µg/m³" icon={Car} />
+            <AirQualityCard label="O₃" value={air.o3} unit="µg/m³" icon={Sun} />
+            <AirQualityCard label="Temperature" value={air.temp} unit="°C" icon={Thermometer} />
+            <AirQualityCard label="Humidity" value={air.humidity} unit="%" icon={Droplets} />
+            <AirQualityCard label="Wind speed" value={air.wind} unit="km/h" icon={Wind} />
+          </div>
+
+          <PollutionChart history={air.history} isDemo={air.isDemo} />
+
+          <section>
+            <h2 className="text-2xl font-bold">Environmental area</h2>
+            <p className="mt-1 text-sm text-ink-muted">Based on OpenStreetMap features mapped within about 500 m of the selected point.</p>
+            <div className="mt-4">
+              {envError ? <Card className="text-sm text-danger">{envError}</Card>
+                : !env ? <Card className="text-sm text-ink-muted">Loading surroundings…</Card>
+                : !env.category ? <Card className="text-sm text-ink-muted">No clearly mapped land-use features were found within {env.radius} m, so this area could not be classified.</Card>
+                : <div className="space-y-3">
+                    <EnvironmentalCategoryCard category={CATEGORIES[env.category]} />
+                    {env.features.length > 1 && <p className="text-sm text-ink-muted">Other mapped features nearby: {env.features.slice(1).map(f => `${CATEGORIES[f.key].name} (${f.count})`).join(', ')}.</p>}
+                  </div>}
+            </div>
+          </section>
+        </div>
+      )}
+    </div>
+  )
+}
+
+==================== FILE: src/pages/Home.tsx ====================
+import { ArrowRight, Droplets, Gauge, Layers, Loader2, MapPin, ScanLine, ShieldCheck, Thermometer } from 'lucide-react'
+import { LungSVG } from '@/components/LungVisualization'
+import { AQIGauge } from '@/components/AQIGauge'
+import { Button, buttonVariants } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
+import { useLocationData } from '@/context/LocationContext'
+import { AQI_NAME, getLevel } from '@/lib/aqi'
+import { placeLabel } from '@/lib/api'
+import { cn } from '@/lib/utils'
+
+const FEATURES = [
+  { icon: ScanLine, title: 'Air Quality Scanner', text: 'Check air quality for any location.', href: '#/air-quality' },
+  { icon: Layers, title: 'Environmental Area Identification', text: 'Identify nearby land use and possible pollution sources.', href: '#/air-quality' },
+  { icon: Gauge, title: 'Lung Health Visualization', text: 'See visually how pollutants travel through the respiratory system.', href: '#/lung-health' },
+  { icon: ShieldCheck, title: 'Personalized Prevention Guide', text: 'Get precautions that match your air and surroundings.', href: '#/prevention' }
+]
+
+function Preview() {
+  const { place, air, status, error, locate, locating } = useLocationData()
+  if (status === 'idle') return (
+    <Card className="flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <div><div className="font-semibold">See the air around you</div><p className="text-sm text-ink-muted">Choose a location to load live air quality here.</p></div>
+      <div className="flex gap-2"><Button onClick={locate} disabled={locating}><MapPin size={18} />Use My Location</Button><a href="#/air-quality" className={buttonVariants({ variant: 'outline' })}>Search a place</a></div>
+    </Card>
+  )
+  if (status === 'loading') return <Card className="flex items-center gap-3 text-sm text-ink-muted"><Loader2 className="animate-spin" size={18} />Loading air quality for {place ? placeLabel(place) : 'your location'}…</Card>
+  if (status === 'error' || !air || !place) return <Card className="text-sm text-danger">{error}</Card>
+  const level = air.aqi == null ? null : getLevel(air.aqi)
+  const stat = (label: string, v: number | null, u: string) => <div><div className="text-xs text-ink-muted">{label}</div><div className="text-xl font-bold tabular-nums">{v == null ? '–' : Math.round(v * 10) / 10}<span className="ml-1 text-xs font-normal text-ink-muted">{u}</span></div></div>
+  return (
+    <Card className="grid items-center gap-6 md:grid-cols-[auto_1fr]">
+      <AQIGauge value={air.aqi} size={180} />
+      <div>
+        <div className="flex flex-wrap items-center gap-2"><span className="flex items-center gap-1 font-semibold"><MapPin size={16} className="text-brand" />{placeLabel(place)}</span>{air.isDemo && <span className="rounded bg-warn/15 px-2 py-0.5 text-xs text-warn">DEMO MODE</span>}</div>
+        <p className="mt-1 text-sm text-ink-muted">{level ? level.text : 'No index available.'} ({AQI_NAME})</p>
+        <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-4">
+          {stat('PM2.5', air.pm25, 'µg/m³')}{stat('PM10', air.pm10, 'µg/m³')}{stat('Temperature', air.temp, '°C')}{stat('Humidity', air.humidity, '%')}
+        </div>
+        <p className="mt-3 text-xs text-ink-muted">Last updated {air.time.replace('T', ' ')} ({air.timezone}). {air.source}.</p>
+      </div>
+    </Card>
+  )
+}
+
+export default function Home() {
+  return (
+    <>
+      <section className="bg-gradient-to-b from-brand-soft/15 via-white to-canvas">
+        <div className="mx-auto grid max-w-6xl items-center gap-10 px-4 py-16 md:grid-cols-2 md:py-24">
+          <div>
+            <h1 className="text-4xl font-extrabold leading-tight tracking-tight md:text-5xl">Know Your Air. Protect Your Lungs.</h1>
+            <p className="mt-5 max-w-lg text-lg text-ink-muted">Understand the air around you, discover its impact on respiratory health, and take the right steps to protect your lungs.</p>
+            <div className="mt-8 flex flex-wrap gap-3">
+              <a href="#/air-quality" className={buttonVariants({ size: 'lg' })}>Explore Air Quality</a>
+              <a href="#/lung-health" className={buttonVariants({ size: 'lg', variant: 'outline' })}>Learn About Lung Health</a>
+            </div>
+          </div>
+          <div className="relative mx-auto w-full max-w-md"><div className="absolute inset-6 rounded-full bg-brand-soft/20 blur-3xl" /><LungSVG exposure={30} mode="short" className="relative w-full drop-shadow-xl" /></div>
+        </div>
+      </section>
+
+      <section className="mx-auto -mt-4 max-w-6xl px-4"><Preview /></section>
+
+      <section className="mx-auto mt-20 max-w-6xl px-4">
+        <h2 className="text-2xl font-bold">Everything you need to read your surroundings</h2>
+        <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {FEATURES.map(f => (
+            <a key={f.title} href={f.href} className="group rounded-2xl border border-slate-100 bg-white p-5 shadow-card transition-shadow hover:shadow-lg">
+              <span className="grid h-11 w-11 place-items-center rounded-xl bg-brand/10 text-brand"><f.icon size={22} /></span>
+              <h3 className="mt-4 font-semibold">{f.title}</h3><p className="mt-1 text-sm text-ink-muted">{f.text}</p>
+              <span className="mt-4 inline-flex items-center gap-1 text-sm font-semibold text-brand">Open <ArrowRight size={14} className="transition-transform group-hover:translate-x-0.5" /></span>
+            </a>
+          ))}
+        </div>
+      </section>
+
+      <section className="mx-auto mt-24 grid max-w-6xl items-center gap-10 px-4 md:grid-cols-2">
+        <Card className="bg-gradient-to-br from-white to-brand-soft/10"><LungSVG exposure={5} mode="short" className="mx-auto w-full max-w-xs" /></Card>
+        <div>
+          <h2 className="text-3xl font-bold">Your Environment Matters to Your Lungs.</h2>
+          <p className="mt-4 text-ink-muted">Each breath carries what is in the air around you. Larger dust particles are mostly caught in the nose and upper airways, while fine particles (PM2.5) and some gases can travel deeper into the lungs.</p>
+          <p className="mt-3 text-ink-muted">Exposure to polluted air is linked to irritation in the short term and to a higher risk of respiratory and heart disease over many years. Knowing your air and surroundings helps you decide when and how to take precautions.</p>
+          <div className="mt-6 flex items-center gap-6 text-sm text-ink-muted"><span className="flex items-center gap-2"><Thermometer size={16} className="text-brand" />Weather</span><span className="flex items-center gap-2"><Droplets size={16} className="text-brand" />Humidity</span><span className="flex items-center gap-2"><Layers size={16} className="text-brand" />Surroundings</span></div>
+          <a href="#/lung-health" className={cn(buttonVariants(), 'mt-6')}>See how particles move</a>
+        </div>
+      </section>
+    </>
+  )
+}
+
+==================== FILE: src/pages/LungHealth.tsx ====================
+import { LungVisualization } from '@/components/LungVisualization'
+export default function LungHealth() {
+  return (
+    <div className="mx-auto max-w-6xl px-4 py-12">
+      <h1 className="text-3xl font-bold">Lung Health Visualization</h1>
+      <p className="mt-2 max-w-2xl text-ink-muted">Move the slider and switch between short-term and long-term exposure to see how the illustration and explanations change.</p>
+      <div className="mt-8"><LungVisualization /></div>
+    </div>
+  )
+}
+
+==================== FILE: src/pages/Prevention.tsx ====================
+import { PreventionRecommendation } from '@/components/PreventionRecommendation'
+import { LocationSearch } from '@/components/LocationSearch'
+import { EnvironmentalCategoryCard } from '@/components/EnvironmentalCategoryCard'
+import { Card } from '@/components/ui/card'
+import { CATEGORIES, CATEGORY_LIST } from '@/data/categories'
+import { useLocationData } from '@/context/LocationContext'
+import { getLevel, AQI_NAME } from '@/lib/aqi'
+import { placeLabel } from '@/lib/api'
+import { buildPlan } from '@/lib/prevention'
+
+export default function Prevention() {
+  const { place, air, env, status, sensitive, setSensitive } = useLocationData()
+  const level = air?.aqi != null ? getLevel(air.aqi) : null
+  const cat = env?.category ?? null
+  const plan = buildPlan(level?.key ?? null, cat, sensitive)
+  const ready = status === 'ready' && !!air
+  return (
+    <div className="mx-auto max-w-6xl px-4 py-12">
+      <h1 className="text-3xl font-bold">Personalized Prevention Guide</h1>
+      <p className="mt-2 max-w-2xl text-ink-muted">Advice adapts to the air quality at your location, the type of surroundings, and, if you choose, your sensitivity.</p>
+      <div className="mt-6"><LocationSearch /></div>
+
+      <Card className="mt-4">
+        <label className="flex items-start gap-3 text-sm"><input type="checkbox" checked={sensitive} onChange={e => setSensitive(e.target.checked)} className="mt-1 h-4 w-4 accent-[#087F8C]" />
+          <span><span className="font-semibold">I may be more sensitive to air pollution</span> (for example asthma, a lung or heart condition, pregnancy, young children, or older age). Optional; it is not stored.</span></label>
+      </Card>
+
+      <div className="mt-8">
+        {ready && place ? (
+          <>
+            <p className="mb-4 text-sm text-ink-muted">For <b className="text-ink">{placeLabel(place)}</b>: {level ? <>{AQI_NAME} {Math.round(air!.aqi!)} ({level.label})</> : 'air index unavailable'}{cat && <> · {CATEGORIES[cat].name}</>}{air!.isDemo && <b className="text-warn"> · DEMO MODE</b>}</p>
+            <PreventionRecommendation plan={plan} />
+            {!level && <p className="mt-3 text-sm text-ink-muted">The air index is unavailable, so the advice above is general.</p>}
+          </>
+        ) : status === 'loading' ? <Card className="text-sm text-ink-muted">Loading your location’s data…</Card>
+          : <Card className="text-sm text-ink-muted">Choose a location to get advice that matches its air quality. In the meantime, here is general guidance for good air:<div className="mt-4"><PreventionRecommendation plan={buildPlan(null, null, sensitive)} /></div></Card>}
+      </div>
+
+      <h2 className="mt-14 text-2xl font-bold">Prevention by environment type</h2>
+      <div className="mt-4 grid gap-4 md:grid-cols-2">{CATEGORY_LIST.map(c => <EnvironmentalCategoryCard key={c.key} category={c} compact />)}</div>
+    </div>
+  )
+}
+
+==================== FILE: src/vite-env.d.ts ====================
+/// <reference types="vite/client" />
+
+==================== FILE: supabase/schema.sql ====================
+create table if not exists public.scans (
+  id bigint generated always as identity primary key,
+  created_at timestamptz not null default now(),
+  place text not null,
+  lat numeric(5,2) not null,
+  lon numeric(5,2) not null,
+  aqi int,
+  pm25 numeric,
+  category text
+);
+alter table public.scans enable row level security;
+-- Anonymous visitors may only INSERT (coordinates are rounded to ~1 km). Nobody can read via the anon key.
+create policy "anon can insert scans" on public.scans for insert to anon with check (true);
+
+==================== FILE: tailwind.config.js ====================
+export default {
+  content: ['./index.html', './src/**/*.{ts,tsx}'],
+  theme: { extend: {
+    colors: { brand: { DEFAULT: '#087F8C', soft: '#27B9C4' }, ink: { DEFAULT: '#172B3A', muted: '#64748B' }, canvas: '#F7FAFC', ok: '#22A06B', warn: '#F59E0B', danger: '#EF4444' },
+    fontFamily: { sans: ['"Plus Jakarta Sans Variable"', 'Inter', 'system-ui', 'sans-serif'] },
+    boxShadow: { card: '0 1px 2px rgba(23,43,58,.05), 0 10px 28px -14px rgba(23,43,58,.14)' }
+  } },
+  plugins: []
+}
+
+==================== FILE: tsconfig.json ====================
+{
+  "compilerOptions": {
+    "target": "ES2020", "lib": ["ES2020", "DOM", "DOM.Iterable"], "module": "ESNext",
+    "moduleResolution": "Bundler", "jsx": "react-jsx", "strict": true, "skipLibCheck": true,
+    "noEmit": true, "isolatedModules": true, "baseUrl": ".", "paths": { "@/*": ["src/*"] },
+    "types": ["vite/client"]
+  },
+  "include": ["src", "vite.config.ts"]
+}
+
+==================== FILE: vite.config.ts ====================
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+
+export default defineConfig({ plugins: [react()], resolve: { alias: { '@': new URL('./src', import.meta.url).pathname } } })
